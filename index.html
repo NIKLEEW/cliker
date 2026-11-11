@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Кликер</title>
+<script src=«https://telegram.org/js/telegram-web-app.js»></script>
+<style>
+:root{--bg:#f4f1ea;--card:#fff;--text:#1d1d1f;--muted:#77736a;--accent:#e8a317;--accent2:#c98507;--line:#e4dfd3;color-scheme:light dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#17150f;--card:#241f15;--text:#f3efe4;--muted:#a39d8c;--accent:#f2b432;--accent2:#d99a14;--line:#383020}}
+:root[data-theme="dark"]{--bg:#17150f;--card:#241f15;--text:#f3efe4;--muted:#a39d8c;--accent:#f2b432;--accent2:#d99a14;--line:#383020}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;user-select:none;-webkit-user-select:none;overflow:hidden}
+.app{max-width:480px;margin:0 auto;height:100%;display:flex;flex-direction:column;padding:16px;gap:12px}
+.top{text-align:center}
+.score{font-size:48px;font-weight:800;line-height:1}
+.sub{color:var(--muted);font-size:14px;margin-top:4px}
+.energy{background:var(--line);border-radius:10px;height:12px;overflow:hidden}
+.energy>i{display:block;height:100%;width:100%;background:var(--accent);transition:width .15s}
+.etext{font-size:13px;color:var(--muted);display:flex;justify-content:space-between}
+.stage{flex:1;display:flex;align-items:center;justify-content:center;position:relative;min-height:0}
+#coin{width:min(62vw,260px);aspect-ratio:1;border-radius:50%;border:0;background:radial-gradient(circle at 35% 30%,#ffe08a,var(--accent) 55%,var(--accent2));box-shadow:0 10px 30px rgba(0,0,0,.25),inset 0 -8px 16px rgba(0,0,0,.15);font-size:min(30vw,120px);cursor:pointer;transition:transform .06s}
+#coin:active{transform:scale(.94)}
+.pop{position:absolute;font-weight:800;font-size:26px;color:var(--accent2);pointer-events:none;animation:up .8s ease-out forwards}
+@keyframes up{to{transform:translateY(-90px);opacity:0}}
+.tabs{display:flex;gap:8px}
+.tabs button{flex:1;padding:10px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--text);font-size:15px;font-weight:600}
+.tabs button.on{background:var(--accent);color:#1d1d1f;border-color:var(--accent)}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:8px;max-height:34vh;overflow-y:auto}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 8px;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:0}
+.row b{display:block;font-size:15px}.row small{color:var(--muted)}
+.buy{padding:8px 12px;border-radius:10px;border:0;background:var(--accent);color:#1d1d1f;font-weight:700;white-space:nowrap}
+.buy:disabled{opacity:.4}
+.hide{display:none}
+.me{background:rgba(232,163,23,.15)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <div class="score" id="score">0</div>
+    <div class="sub" id="sub">за тап: 1 · в час: 0</div>
+  </div>
+  <div>
+    <div class="etext"><span>⚡ Энергия</span><span id="etext">500/500</span></div>
+    <div class="energy"><i id="ebar"></i></div>
+  </div>
+  <div class="stage"><button id="coin" aria-label="Тап">🪙</button></div>
+  <div class="tabs">
+    <button id="t1" class="on">Улучшения</button>
+    <button id="t2">Рейтинг</button>
+  </div>
+  <div class="panel" id="shop"></div>
+  <div class="panel hide" id="rank"></div>
+</div>
+<script>
+(function(){
+  var tg = (window.Telegram && window.Telegram.WebApp) || null;
+  if (tg) { try { tg.ready(); tg.expand(); } catch(e){} }
+  var userName = (tg && tg.initDataUnsafe && tg.initDataUnsafe.user && tg.initDataUnsafe.user.first_name) || 'Ты';
+
+  var UPG = [
+    {id:'tap',  name:'Сильный палец', desc:'+1 очко за тап', base:50,  mult:1.6},
+    {id:'cap',  name:'Больше энергии', desc:'+100 к максимуму', base:80,  mult:1.5},
+    {id:'regen',name:'Быстрый заряд', desc:'+1 энергии в секунду', base:120, mult:1.7},
+    {id:'auto', name:'Автомайнер', desc:'+100 очков в час', base:200, mult:1.8}
+  ];
+  var S = {score:0, energy:500, lv:{tap:0,cap:0,regen:0,auto:0}, last:Date.now()};
+  try { var raw = localStorage.getItem('clicker_v1'); if (raw) S = Object.assign(S, JSON.parse(raw)); } catch(e){}
+  S.lv = Object.assign({tap:0,cap:0,regen:0,auto:0}, S.lv);
+
+  function perTap(){ return 1 + S.lv.tap; }
+  function maxE(){ return 500 + 100*S.lv.cap; }
+  function regen(){ return 1 + S.lv.regen; }
+  function perHour(){ return 100*S.lv.auto; }
+  function cost(u){ return Math.floor(u.base * Math.pow(u.mult, S.lv[u.id])); }
+  function fmt(n){ return Math.floor(n).toLocaleString('ru-RU'); }
+  function save(){ try { localStorage.setItem('clicker_v1', JSON.stringify(S)); } catch(e){} }
+
+  // офлайн-доход и восстановление энергии
+  var now = Date.now(), dt = Math.max(0, (now - S.last)/1000);
+  S.energy = Math.min(maxE(), S.energy + dt*regen());
+  S.score += Math.min(dt, 3*3600) * perHour()/3600;
+  S.last = now;
+
+  var elScore = document.getElementById('score'), elSub = document.getElementById('sub'),
+      elE = document.getElementById('etext'), elBar = document.getElementById('ebar'),
+      coin = document.getElementById('coin'), shop = document.getElementById('shop'),
+      rank = document.getElementById('rank');
+
+  function render(){
+    elScore.textContent = fmt(S.score);
+    elSub.textContent = 'за тап: ' + perTap() + ' · в час: ' + fmt(perHour());
+    elE.textContent = fmt(S.energy) + '/' + maxE();
+    elBar.style.width = (S.energy/maxE()*100) + '%';
+  }
+  function renderShop(){
+    shop.innerHTML = '';
+    UPG.forEach(function(u){
+      var c = cost(u), row = document.createElement('div');
+      row.className = 'row';
+      row.innerHTML = '<div><b>' + u.name + ' · ур. ' + S.lv[u.id] + '</b><small>' + u.desc + '</small></div>';
+      var b = document.createElement('button');
+      b.className = 'buy'; b.textContent = fmt(c) + ' 🪙'; b.disabled = S.score < c;
+      b.onclick = function(){ if (S.score >= c){ S.score -= c; S.lv[u.id]++; save(); render(); renderShop(); } };
+      row.appendChild(b); shop.appendChild(row);
+    });
+  }
+  function renderRank(){
+    // Демо-рейтинг. Для настоящего нужен сервер, который хранит очки всех игроков.
+    var bots = [['Алия',48200],['Тимур',31650],['Мадина',22900],['Данияр',15400],['Света',9800],['Руслан',4200]];
+    var list = bots.concat([[userName, Math.floor(S.score)]]).sort(function(a,b){return b[1]-a[1];});
+    rank.innerHTML = '';
+    list.forEach(function(p,i){
+      var r = document.createElement('div');
+      r.className = 'row' + (p[0]===userName && p[1]===Math.floor(S.score) ? ' me' : '');
+      r.innerHTML = '<div><b>' + (i+1) + '. ' + p[0] + '</b></div><div>' + fmt(p[1]) + ' 🪙</div>';
+      rank.appendChild(r);
+    });
+  }
+
+  function tap(x, y, rect){
+    var p = perTap();
+    if (S.energy < p) return;
+    S.energy -= p; S.score += p;
+    if (tg && tg.HapticFeedback) { try { tg.HapticFeedback.impactOccurred('light'); } catch(e){} }
+    var pop = document.createElement('div');
+    pop.className = 'pop'; pop.textContent = '+' + p;
+    pop.style.left = (x - rect.left - 12) + 'px'; pop.style.top = (y - rect.top - 20) + 'px';
+    coin.parentNode.appendChild(pop);
+    setTimeout(function(){ pop.remove(); }, 800);
+    render();
+  }
+  // мультитач: каждый палец считается отдельным тапом
+  coin.addEventListener('touchstart', function(e){
+    e.preventDefault();
+    var rect = coin.parentNode.getBoundingClientRect();
+    for (var i=0;i<e.changedTouches.length;i++) tap(e.changedTouches[i].clientX, e.changedTouches[i].clientY, rect);
+  }, {passive:false});
+  coin.addEventListener('mousedown', function(e){ tap(e.clientX, e.clientY, coin.parentNode.getBoundingClientRect()); });
+
+  document.getElementById('t1').onclick = function(){ this.classList.add('on'); document.getElementById('t2').classList.remove('on'); shop.classList.remove('hide'); rank.classList.add('hide'); renderShop(); };
+  document.getElementById('t2').onclick = function(){ this.classList.add('on'); document.getElementById('t1').classList.remove('on'); rank.classList.remove('hide'); shop.classList.add('hide'); renderRank(); };
+
+  var tick = 0;
+  setInterval(function(){
+    S.energy = Math.min(maxE(), S.energy + regen());
+    S.score += perHour()/3600;
+    S.last = Date.now();
+    render();
+    if (++tick % 5 === 0) { save(); if (!shop.classList.contains('hide')) renderShop(); }
+  }, 1000);
+
+  window.addEventListener('pagehide', save);
+  render(); renderShop();
+})();
+</script>
+</body>
+</html>
